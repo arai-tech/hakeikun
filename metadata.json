@@ -1,0 +1,5 @@
+{
+  "name": "波形君",
+  "description": "A professional timing chart creation tool with real-time SVG rendering and WaveDrom-compatible syntax.",
+  "requestFramePermissions": []
+}
