@@ -106,9 +106,21 @@ export const TimingChartRenderer = forwardRef<TimingChartRef, TimingChartRendere
     const CHART_BOTTOM = height - PADDING;
     const slopeX = signal.hasSlope ? (scaledSlotWidth * (signal.slopeDuration || 0.1)) : 0;
 
-    const getVerticalPos = (type: string) => {
-      if (type === '1' || type === 'r' || type === 'H') return yTop;
-      if (type === '0' || type === 'f' || type === 'L') return yBottom;
+    const hasInitialEdge = (type: string) => {
+      return ['p', 'n', 'd', 'P', 'N', 'D'].includes(type);
+    };
+
+    const getEntryY = (type: string) => {
+      if (type === '1' || type === 'r' || type === 'H' || type === 'n' || type === 'N') return yTop;
+      if (type === '0' || type === 'f' || type === 'L' || type === 'p' || type === 'P' || type === 'd' || type === 'D') return yBottom;
+      if (/[0-9=x]/.test(type)) return yMid;
+      return null;
+    };
+
+    const getExitY = (type: string) => {
+      if (type === '1' || type === 'r' || type === 'H' || type === 'n' || type === 'N') return yTop;
+      if (type === '0' || type === 'f' || type === 'L' || type === 'p' || type === 'P' || type === 'd' || type === 'D') return yBottom;
+      if (/[0-9=x]/.test(type)) return yMid;
       return null;
     };
 
@@ -116,6 +128,35 @@ export const TimingChartRenderer = forwardRef<TimingChartRef, TimingChartRendere
       const prevSeg = signal.segments[i - 1];
       const nextSeg = signal.segments[i + 1];
       const segWidth = seg.duration * scaledSlotWidth;
+
+      // Transition from previous segment to this one
+      if (prevSeg && prevSeg.type !== 'gap' && seg.type !== 'gap') {
+        const prevExitY = getExitY(prevSeg.type);
+        const thisEntryY = getEntryY(seg.type);
+        if (prevExitY !== null && thisEntryY !== null && prevExitY !== thisEntryY) {
+          if (signal.hasSlope) {
+            paths.push(
+              <line
+                key={`trans-entry-${rowIndex}-${i}`}
+                x1={currentX - slopeX / 2} y1={prevExitY}
+                x2={currentX + slopeX / 2} y2={thisEntryY}
+                stroke="#141414"
+                strokeWidth="1.5"
+              />
+            );
+          } else {
+            paths.push(
+              <line
+                key={`trans-entry-${rowIndex}-${i}`}
+                x1={currentX} y1={prevExitY}
+                x2={currentX} y2={thisEntryY}
+                stroke="#141414"
+                strokeWidth="1.5"
+              />
+            );
+          }
+        }
+      }
       
       // Background for data buses (0-9 and =)
       if (/[0-9=]/.test(seg.type)) {
@@ -186,10 +227,10 @@ export const TimingChartRenderer = forwardRef<TimingChartRef, TimingChartRendere
         let endX = currentX + segWidth;
 
         if (signal.hasSlope) {
-          if (prevSeg && prevSeg.type !== 'gap' && getVerticalPos(prevSeg.type) !== getVerticalPos(seg.type)) {
+          if (prevSeg && prevSeg.type !== 'gap' && getExitY(prevSeg.type) !== getEntryY(seg.type)) {
             startX += slopeX / 2;
           }
-          if (nextSeg && nextSeg.type !== 'gap' && getVerticalPos(nextSeg.type) !== getVerticalPos(seg.type)) {
+          if (nextSeg && nextSeg.type !== 'gap' && (getExitY(seg.type) !== getEntryY(nextSeg.type) || hasInitialEdge(nextSeg.type))) {
             endX -= slopeX / 2;
           }
         }
@@ -221,17 +262,27 @@ export const TimingChartRenderer = forwardRef<TimingChartRef, TimingChartRendere
 
         paths.push(<g key={`level-group-${rowIndex}-${i}`}>{levelLines}</g>);
       }
- else if (['p', 'n', 'd', 'P', 'N', 'D'].includes(seg.type)) {
+      else if (['p', 'n', 'd', 'P', 'N', 'D'].includes(seg.type)) {
         // Clock / Pulse
         const halfWidth = segWidth / 2;
         const fallingEdgeX = currentX + halfWidth;
         const risingEdgeX = currentX;
+        const isNegative = ['n', 'N'].includes(seg.type);
         
+        const startY = isNegative ? yTop : yBottom;
+        const midY = isNegative ? yBottom : yTop;
+        const endY = isNegative ? yTop : yBottom;
+
         let clockPath = "";
         if (signal.hasSlope) {
-          clockPath = `M ${currentX - slopeX/2} ${yBottom} L ${currentX + slopeX/2} ${yTop} L ${fallingEdgeX - slopeX/2} ${yTop} L ${fallingEdgeX + slopeX/2} ${yBottom} L ${currentX + segWidth - slopeX/2} ${yBottom}`;
+          const startX_pulse = currentX - slopeX / 2;
+          let endX_pulse = currentX + segWidth;
+          if (nextSeg && nextSeg.type !== 'gap' && (endY !== getEntryY(nextSeg.type) || hasInitialEdge(nextSeg.type))) {
+            endX_pulse -= slopeX / 2;
+          }
+          clockPath = `M ${startX_pulse} ${startY} L ${currentX + slopeX/2} ${midY} L ${fallingEdgeX - slopeX/2} ${midY} L ${fallingEdgeX + slopeX/2} ${endY} L ${endX_pulse} ${endY}`;
         } else {
-          clockPath = `M ${currentX} ${yBottom} L ${currentX} ${yTop} L ${fallingEdgeX} ${yTop} L ${fallingEdgeX} ${yBottom} L ${currentX + segWidth} ${yBottom}`;
+          clockPath = `M ${currentX} ${startY} L ${currentX} ${midY} L ${fallingEdgeX} ${midY} L ${fallingEdgeX} ${endY} L ${currentX + segWidth} ${endY}`;
         }
         
         const dashedLines = [];
@@ -295,36 +346,6 @@ export const TimingChartRenderer = forwardRef<TimingChartRef, TimingChartRendere
             />
           </g>
         );
-      }
-
-      // Vertical transitions
-      if (nextSeg && nextSeg.type !== 'gap' && seg.type !== 'gap') {
-        const nextY = getVerticalPos(nextSeg.type);
-        const currY = getVerticalPos(seg.type);
-        
-        if (currY !== null && nextY !== null && currY !== nextY) {
-           if (signal.hasSlope) {
-              paths.push(
-                <line
-                  key={`trans-${rowIndex}-${i}`}
-                  x1={currentX + segWidth - slopeX / 2} y1={currY}
-                  x2={currentX + segWidth + slopeX / 2} y2={nextY}
-                  stroke="#141414"
-                  strokeWidth="1.5"
-                />
-              );
-           } else {
-              paths.push(
-                <line
-                  key={`trans-${rowIndex}-${i}`}
-                  x1={currentX + segWidth} y1={currY}
-                  x2={currentX + segWidth} y2={nextY}
-                  stroke="#141414"
-                  strokeWidth="1.5"
-                />
-              );
-           }
-        }
       }
 
       currentX += segWidth;
